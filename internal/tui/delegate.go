@@ -132,8 +132,10 @@ func (d itemDelegate) buildRow(s provider.Session, width int) (plain, styled str
 	badgePlain := "[" + agentBadge(s.Agent) + "]"
 	badgeStyled := d.badgeStyle(s.Agent).Render(badgePlain)
 
-	folder := s.Folder()
-	path := s.Directory
+	dirDisplay := compactHomePath(s.Directory)
+	if dirDisplay == "" {
+		dirDisplay = "?"
+	}
 	title := SessionItem{Session: s}.Title()
 
 	rightPlain := relativeTime(time.Now(), s.TimeUpdated)
@@ -155,18 +157,17 @@ func (d itemDelegate) buildRow(s provider.Session, width int) (plain, styled str
 
 	const separator = " · "
 	separatorWidth := lipgloss.Width(separator)
-	// badge + separator + space before path + separator + minimum gap + right side
-	fixed := lipgloss.Width(badgePlain) + separatorWidth + 1 + separatorWidth + rightWidth + 1
+	// badge + separator + directory + separator + gap + right side
+	fixed := lipgloss.Width(badgePlain) + 2*separatorWidth + rightWidth + 1
 	available := width - fixed
 
-	var folderPlain, pathPlain, titlePlain string
-	if available < 3 {
+	if available < 10 {
 		// Extremely narrow: keep the badge, the title and the right side.
 		budget := width - lipgloss.Width(badgePlain) - separatorWidth - rightWidth - 1
 		if budget < 1 {
 			budget = 1
 		}
-		titlePlain = truncatePlain(title, budget)
+		titlePlain := truncatePlain(title, budget)
 		leftPlain := badgePlain + separator + titlePlain
 		leftStyled := badgeStyled + d.styles.sep.Render(separator) + d.styles.title.Render(titlePlain)
 		gap := max(1, width-lipgloss.Width(leftPlain)-rightWidth)
@@ -174,35 +175,23 @@ func (d itemDelegate) buildRow(s provider.Session, width int) (plain, styled str
 			leftStyled + strings.Repeat(" ", gap) + rightStyled
 	}
 
-	// Give the folder the largest slice, keep a quarter for the path and let
-	// the title take whatever remains.
-	folderWidth := min(lipgloss.Width(folder), max(1, available*2/5))
-	pathWidth := min(lipgloss.Width(path), max(1, available/4))
-	for folderWidth+pathWidth > available-1 {
-		if pathWidth > 1 {
-			pathWidth--
-			continue
-		}
-		if folderWidth > 1 {
-			folderWidth--
-			continue
-		}
-		break
+	// Show a compact directory (~/git/project) instead of the folder plus the
+	// full path, which duplicated most of the same text. Keep the whole
+	// directory visible when possible, reserving at least 12 cells for title.
+	dirWidth := lipgloss.Width(dirDisplay)
+	if dirWidth > available-12 {
+		dirWidth = max(8, available-12)
 	}
-	titleWidth := max(1, available-folderWidth-pathWidth)
+	titleWidth := max(1, available-dirWidth)
 
-	folderPlain = truncatePlain(folder, folderWidth)
-	pathPlain = truncateLeftPlain(path, pathWidth)
-	titlePlain = truncatePlain(title, titleWidth)
+	dirPlain := truncateLeftPlain(dirDisplay, dirWidth)
+	titlePlain := truncatePlain(title, titleWidth)
+	dirPrefix, dirBase := splitDirDisplay(dirPlain)
 
-	leftPlain := badgePlain + separator + folderPlain
-	leftStyled := badgeStyled + d.styles.sep.Render(separator) + d.styles.folder.Render(folderPlain)
-	if pathPlain != "" {
-		leftPlain += " " + pathPlain
-		leftStyled += " " + d.styles.path.Render(pathPlain)
-	}
-	leftPlain += separator + titlePlain
-	leftStyled += d.styles.sep.Render(separator) + d.styles.title.Render(titlePlain)
+	leftPlain := badgePlain + separator + dirPlain + separator + titlePlain
+	leftStyled := badgeStyled + d.styles.sep.Render(separator) +
+		d.styles.path.Render(dirPrefix) + d.styles.folder.Render(dirBase) +
+		d.styles.sep.Render(separator) + d.styles.title.Render(titlePlain)
 
 	gap := width - lipgloss.Width(leftPlain) - rightWidth
 	if gap < 1 {
@@ -210,6 +199,44 @@ func (d itemDelegate) buildRow(s provider.Session, width int) (plain, styled str
 	}
 	spaces := strings.Repeat(" ", gap)
 	return leftPlain + spaces + rightPlain, leftStyled + spaces + rightStyled
+}
+
+// compactHomePath replaces the user's home prefix with "~" so rows stay short.
+func compactHomePath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	home := provider.HomeDir()
+	if home == "" {
+		return dir
+	}
+	if dir == home {
+		return "~"
+	}
+	if strings.HasPrefix(dir, home+"/") {
+		return "~" + dir[len(home):]
+	}
+	return dir
+}
+
+// splitDirDisplay splits a compact directory at the last slash so the parent
+// can be dimmed while the project folder stays bold.
+func splitDirDisplay(dir string) (prefix, base string) {
+	if dir == "" {
+		return "", ""
+	}
+	if dir == "~" {
+		return "", "~"
+	}
+	index := strings.LastIndex(dir, "/")
+	switch {
+	case index < 0:
+		return "", dir
+	case index == 0:
+		return "/", dir[1:]
+	default:
+		return dir[:index+1], dir[index+1:]
+	}
 }
 
 func (d itemDelegate) badgeStyle(agent string) lipgloss.Style {

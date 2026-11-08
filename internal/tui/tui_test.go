@@ -220,6 +220,68 @@ func TestEscapeClearsFilterBeforeCanceling(t *testing.T) {
 	}
 }
 
+func TestCompactHomePath(t *testing.T) {
+	home := provider.HomeDir()
+	cases := []struct {
+		dir  string
+		want string
+	}{
+		{home, "~"},
+		{home + "/git/project", "~/git/project"},
+		{"/tmp/project", "/tmp/project"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := compactHomePath(tc.dir); got != tc.want {
+			t.Errorf("compactHomePath(%q) = %q, want %q", tc.dir, got, tc.want)
+		}
+	}
+}
+
+func TestSplitDirDisplay(t *testing.T) {
+	cases := []struct {
+		dir, prefix, base string
+	}{
+		{"~/git/project", "~/git/", "project"},
+		{"/tmp/project", "/tmp/", "project"},
+		{"/project", "/", "project"},
+		{"project", "", "project"},
+		{"~", "", "~"},
+		{"", "", ""},
+	}
+	for _, tc := range cases {
+		prefix, base := splitDirDisplay(tc.dir)
+		if prefix != tc.prefix || base != tc.base {
+			t.Errorf("splitDirDisplay(%q) = (%q, %q), want (%q, %q)", tc.dir, prefix, base, tc.prefix, tc.base)
+		}
+	}
+}
+
+func TestRowUsesCompactHomePath(t *testing.T) {
+	home := provider.HomeDir()
+	sessions := []provider.Session{{
+		ID:        "ses_home",
+		Agent:     provider.AgentOpenCode,
+		Directory: home + "/git/agent-session-manager",
+		Title:     "Compact row",
+		DirExists: true,
+	}}
+	m := NewModel(sessions, Options{})
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	view := m.View()
+	if !strings.Contains(view, "~/git/agent-session-manager") {
+		t.Errorf("view does not use compact home path:\n%s", view)
+	}
+	if strings.Contains(view, home) {
+		t.Errorf("view still contains the full home path:\n%s", view)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > 80 {
+			t.Errorf("line %d is %d cells wide, want <= 80: %q", i, got, line)
+		}
+	}
+}
+
 func TestRelativeTime(t *testing.T) {
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 	cases := []struct {

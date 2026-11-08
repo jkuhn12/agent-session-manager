@@ -87,8 +87,19 @@ type Provider interface {
 ### zsh wrapper (installed via `asm init` which prints the snippet; README explains)
 ```zsh
 asm() {
+  # Subcommands pass through. Bare asm and picker flags run the picker.
+  case "${1:-pick}" in
+    pick) ;;
+    -h|--help|-v|--version|help|version|list|ls|doctor|init)
+      command asm "$@"
+      return
+      ;;
+    -*) set -- pick "$@" ;;
+    *) command asm "$@"; return ;;
+  esac
+
   local sel dir agent sid
-  sel=$(command asm pick) || return
+  sel=$(command asm "$@") || return
   IFS=$'\t' read -r dir agent sid <<< "$sel"
   [[ -n "$dir" ]] || return
   cd "$dir" || return
@@ -102,7 +113,7 @@ asm() {
 - Ghostty needs no special config (runs in whatever split/tab the shell is in); optionally document `keybind = cmd+g:new_split:zsh -ic asm` for a dedicated picker keybind.
 
 ### TUI details
-- One row: `[oc]/[cc] badge · folder name (dim path) · title · relative time (2h, 3d)`; missing dir → dim row + `gone` badge (still selectable; wrapper `cd` will fail loudly — acceptable).
+- One row: `[oc]/[cc] badge · compact ~/… directory (dim parent, bold folder) · title · relative time (2h, 3d)`; missing dir → dim row + `gone` badge (still selectable; wrapper `cd` will fail loudly — acceptable).
 - `bubbles/list` with built-in fuzzy filtering; ↑/↓ navigate, type to filter, Enter select, Esc quit.
 - Preview pane (stretch goal in M5, data is available): last user message snippet, message count, model, cost, created vs updated.
 

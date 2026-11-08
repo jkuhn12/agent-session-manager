@@ -40,8 +40,9 @@ state they were in" problem.
   including `~`, `~/git` itself, and projects that no longer exist.
 - **Flat, newest-first list** with fuzzy filtering across folder, title, full
   path and agent.
-- **One row per session**: `[oc]`/`[cc]` agent badge, folder, dimmed path,
-  title, relative age, and a `gone` badge when the project folder vanished.
+- **One row per session**: `[oc]`/`[cc]` agent badge, compact `~/…` directory
+  (parent dimmed, project folder bold), title, relative age, and a `gone` badge
+  when the project folder vanished.
 - **Preview pane** with the last user message, message count, model, cost,
   open/total todos, and created/updated timestamps.
 - **Same-terminal resume**: the wrapper `cd`s into the session directory and
@@ -225,8 +226,19 @@ the picker prints the selection on stdout and a shell function performs the
 ```zsh
 # Add this to ~/.zshrc, then run: exec zsh
 asm() {
+  # Subcommands pass through. Bare asm and picker flags run the picker.
+  case "${1:-pick}" in
+    pick) ;;
+    -h|--help|-v|--version|help|version|list|ls|doctor|init)
+      command asm "$@"
+      return
+      ;;
+    -*) set -- pick "$@" ;;
+    *) command asm "$@"; return ;;
+  esac
+
   local sel dir agent sid
-  sel=$(command asm pick) || return
+  sel=$(command asm "$@") || return
   IFS=$'\t' read -r dir agent sid <<< "$sel"
   [[ -n "$dir" ]] || return
   cd "$dir" || return
@@ -244,8 +256,10 @@ asm() {
 
 Notes:
 
-- The function is named `asm` and calls `command asm pick` to reach the binary,
-  avoiding recursion.
+- The function is named `asm` and calls `command asm "$@"` to reach the binary,
+  avoiding recursion. Subcommands (`list`, `doctor`, `init`, `version`, `help`)
+  pass straight through; bare `asm` and picker flags (`--no-preview`,
+  `--title`) run the picker.
 - The agent runs as a **child process**, not `exec`; quitting it drops you back
   into a shell already in the project directory.
 - Ghostty needs no special configuration beyond running the picker in whatever
@@ -507,8 +521,18 @@ absent Claude store is normal until you use Claude Code.
 
 **The picker works but the shell does not `cd`**
 Make sure you are calling the zsh **function** from `asm init`, not launching the
-binary directly. The function must call `command asm pick` so stdout can be
+binary directly. The function must call `command asm "$@"` so stdout can be
 captured. Reload zsh after editing `~/.zshrc`.
+
+**`asm version` / `asm list` opens the picker**
+Your wrapper is stale. The original snippet always called `asm pick` regardless
+of arguments. Replace the `asm()` block in `~/.zshrc` with the output of
+`asm init` (the current version passes subcommands through), then `exec zsh`.
+
+**The list looks cramped or shows awkward truncation**
+Resize the terminal wider, or hide the preview with `asm --no-preview`. Rows
+show a compact `~/…` path; the full path is still used for `cd` and is visible
+in `asm list`, `asm doctor` and the preview pane.
 
 **`asm` resolves to the wrong binary**
 Check `type asm` and `command -v asm`. Ensure `$(go env GOPATH)/bin` precedes

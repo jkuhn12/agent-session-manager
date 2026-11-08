@@ -41,8 +41,19 @@ the zsh wrapper from "asm init" so the shell can cd and launch the agent.`
 
 	zshSnippet = `# Add this to ~/.zshrc, then run: exec zsh
 asm() {
+  # Subcommands pass through. Bare asm and picker flags run the picker.
+  case "${1:-pick}" in
+    pick) ;;
+    -h|--help|-v|--version|help|version|list|ls|doctor|init)
+      command asm "$@"
+      return
+      ;;
+    -*) set -- pick "$@" ;;
+    *) command asm "$@"; return ;;
+  esac
+
   local sel dir agent sid
-  sel=$(command asm pick) || return
+  sel=$(command asm "$@") || return
   IFS=$'\t' read -r dir agent sid <<< "$sel"
   [[ -n "$dir" ]] || return
   cd "$dir" || return

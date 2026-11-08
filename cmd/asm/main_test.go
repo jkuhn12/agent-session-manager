@@ -28,7 +28,7 @@ func TestRunVersionAndInit(t *testing.T) {
 	if code := run([]string{"init"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("init exit = %d, stderr = %s", code, stderr.String())
 	}
-	for _, want := range []string{"asm()", "opencode -s", "claude --resume", "IFS=$'\\t'"} {
+	for _, want := range []string{"asm()", "opencode -s", "claude --resume", "IFS=$'\\t'", `command asm "$@"`, "list|ls|doctor|init"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("init output missing %q:\n%s", want, stdout.String())
 		}

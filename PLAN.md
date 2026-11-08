@@ -1,7 +1,7 @@
 # agent-session-manager (`asm`) — Implementation Plan
 
 **Date:** 2026-11-08
-**Repo:** https://github.com/jkuhn12/agent-session-manager (exists on GitHub, currently empty)
+**Repo:** git@github.com:jkuhn12/agent-session-manager.git (exists on GitHub, currently empty)
 **Local folder:** `~/git/agent-session-manager` (currently empty, not yet a git repo)
 
 ## Goal
@@ -109,7 +109,7 @@ asm() {
 ## Milestones
 
 - **M0 — Repo setup**
-  - `git init`, `git remote add origin https://github.com/jkuhn12/agent-session-manager.git`, branch `main`.
+  - `git init`, `git remote add origin git@github.com:jkuhn12/agent-session-manager.git`, branch `main`.
   - Copy this plan into the repo as `PLAN.md` (user wants it in the repo folder).
   - Scaffold: `go.mod` (module `github.com/jkuhn12/agent-session-manager`), dirs, `.gitignore`, `LICENSE` (MIT), `Makefile`, README stub. First commit + push.
 - **M1 — opencode provider + `asm list`**

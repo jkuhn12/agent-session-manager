@@ -470,6 +470,9 @@ Manual verification performed against the live environment:
 - A PTY test confirmed Enter prints exactly
   `<directory>\t<agent>\t<session-id>` to stdout while the UI stays on
   `/dev/tty`, and Esc/Ctrl-C exit `130` with empty stdout.
+- With stdout redirected to a pipe (the wrapper scenario), the picker still
+  emitted ANSI styling and a visible selected-row background; the selection
+  line on stdout stayed clean.
 - Fuzzy filtering was exercised (`mtg` → 37 matches) and Esc cleared the filter
   before quitting on the second press.
 - The full zsh wrapper flow was verified with a stand-in `opencode` binary: the
@@ -492,6 +495,10 @@ Manual verification performed against the live environment:
 - Previews are loaded synchronously but cached per session. This is instant for
   opencode; a very large Claude transcript could take a few milliseconds on
   first selection.
+- The picker configures lipgloss's color profile and light/dark background from
+  `/dev/tty`, not stdout. This is required because the zsh wrapper captures
+  stdout; detecting from stdin/stdout would strip all styling and the selected
+  row highlight.
 - The repository is initialized with `origin` pointing at
   `git@github.com:jkuhn12/agent-session-manager.git` (SSH). Authenticate your
   SSH key with GitHub before pushing.
@@ -548,8 +555,11 @@ The wrapper always `cd`s into the stored session directory before launching.
 If the recorded directory is stale, you will see a `cd` failure rather than a
 resume elsewhere. `asm list` shows the full stored directory.
 
-**No colors / odd rendering**
-Set `NO_COLOR=1`. The TUI needs a real terminal; use `asm list` in scripts.
+**No colors or selection highlight**
+The shell wrapper captures stdout, so the picker detects color support and the
+terminal background from `/dev/tty` rather than stdout. Make sure you are on the
+latest build (`asm version`) and have reloaded zsh; check that `NO_COLOR` is
+unset. If the terminal genuinely lacks color, the UI falls back to plain text.
 
 **Claude sessions disappeared**
 Claude Code deletes transcripts after `cleanupPeriodDays` (default ~30 days).

@@ -213,6 +213,7 @@ func Run(sessions []provider.Session, options Options) (Selection, error) {
 	var programOptions []tea.ProgramOption
 	if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
 		defer tty.Close() //nolint:errcheck
+		configureStyles(tty)
 		programOptions = []tea.ProgramOption{
 			tea.WithInput(tty),
 			tea.WithOutput(tty),
@@ -239,6 +240,16 @@ func Run(sessions []provider.Session, options Options) (Selection, error) {
 		return selection, nil
 	}
 	return Selection{}, ErrCanceled
+}
+
+// configureStyles makes lipgloss detect color support and background from the
+// terminal we actually render to. The shell wrapper captures the picker's
+// stdout, so lipgloss's default stdout detection would see a pipe and strip
+// every style, leaving the list uncolored and without a visible selection.
+func configureStyles(tty *os.File) {
+	renderer := lipgloss.NewRenderer(tty)
+	lipgloss.SetColorProfile(renderer.ColorProfile())
+	lipgloss.SetHasDarkBackground(renderer.HasDarkBackground())
 }
 
 func (m *Model) layout() {

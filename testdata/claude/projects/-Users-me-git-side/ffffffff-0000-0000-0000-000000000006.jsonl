@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"SUBAGENT SECRET"},"cwd":"/wrong/dir","sessionId":"ffffffff-0000-0000-0000-000000000006","timestamp":"2026-11-06T08:00:00.000Z","isSidechain":true}
+{"type":"user","message":{"role":"user","content":"Main sidechain test"},"cwd":"/Users/me/git/side","sessionId":"ffffffff-0000-0000-0000-000000000006","timestamp":"2026-11-06T08:00:01.000Z","isSidechain":false}

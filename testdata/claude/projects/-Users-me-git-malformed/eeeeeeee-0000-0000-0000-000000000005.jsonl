@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"Before the malformed line"},"cwd":"/Users/me/git/malformed","sessionId":"eeeeeeee-0000-0000-0000-000000000005","timestamp":"2026-11-05T08:00:00.000Z","isSidechain":false}
+{"type":"user","message":{"role":
+this line is not JSON at all
+{"type":"system","content":"unknown record type"}
+{"type":"user","message":{"role":"user","content":"After the malformed line"},"cwd":"/Users/me/git/malformed","sessionId":"eeeeeeee-0000-0000-0000-000000000005","timestamp":"2026-11-05T08:00:02.000Z","isSidechain":false}

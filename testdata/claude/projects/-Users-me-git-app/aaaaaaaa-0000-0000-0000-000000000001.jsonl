@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"please fix the login bug"},"cwd":"/Users/me/git/app","sessionId":"aaaaaaaa-0000-0000-0000-000000000001","timestamp":"2026-11-01T10:00:00.000Z","gitBranch":"main","isSidechain":false}
+{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"Sure, let me look."}]},"timestamp":"2026-11-01T10:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":"also add a regression test"},"cwd":"/Users/me/git/app","sessionId":"aaaaaaaa-0000-0000-0000-000000000001","timestamp":"2026-11-01T10:01:00.000Z","gitBranch":"main","isSidechain":false}
+{"type":"summary","summary":"Fix the login bug","leafUuid":"aaaaaaaa-0000-0000-0000-000000000001"}
+{"type":"custom-title","customTitle":"Login bug deep dive","sessionId":"aaaaaaaa-0000-0000-0000-000000000001"}

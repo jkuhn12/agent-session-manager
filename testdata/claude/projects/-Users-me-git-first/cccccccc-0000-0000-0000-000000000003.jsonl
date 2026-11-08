@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"command output"}]},"cwd":"/Users/me/git/first","sessionId":"cccccccc-0000-0000-0000-000000000003","timestamp":"2026-11-03T08:00:00.000Z","isSidechain":false}
+{"type":"user","message":{"role":"user","content":"Explain the payment flow"},"cwd":"/Users/me/git/first","sessionId":"cccccccc-0000-0000-0000-000000000003","timestamp":"2026-11-03T08:00:01.000Z","isSidechain":false}
+{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-1","content":[{"type":"text","text":"ok"}]},"timestamp":"2026-11-03T08:00:02.000Z"}

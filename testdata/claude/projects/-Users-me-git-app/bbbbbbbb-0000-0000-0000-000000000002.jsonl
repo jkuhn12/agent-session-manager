@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"hello there"},"cwd":"/Users/me/git/app","sessionId":"bbbbbbbb-0000-0000-0000-000000000002","timestamp":"2026-11-02T09:00:00.000Z","gitBranch":"main","isSidechain":false}
+{"type":"summary","summary":"Refactor auth flow","leafUuid":"bbbbbbbb-0000-0000-0000-000000000002"}

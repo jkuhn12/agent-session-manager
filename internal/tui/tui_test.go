@@ -368,6 +368,97 @@ func TestPreviewPaneAbsentWithoutLoader(t *testing.T) {
 	}
 }
 
+func TestTabScopesToSelectedFolderAndBack(t *testing.T) {
+	m := NewModel(testSessions(), Options{})
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if len(m.sessions) != 1 {
+		t.Fatalf("scoped sessions = %d, want 1", len(m.sessions))
+	}
+	if m.sessions[0].ID != "ses_alpha" {
+		t.Errorf("scoped session = %q, want ses_alpha", m.sessions[0].ID)
+	}
+	if view := m.View(); !strings.Contains(view, "in /tmp/alpha-project") {
+		t.Errorf("header missing scope label:\n%s", view)
+	}
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if len(m.sessions) != 2 {
+		t.Errorf("cleared scope sessions = %d, want 2", len(m.sessions))
+	}
+}
+
+func TestEscapeClearsScopeBeforeQuitting(t *testing.T) {
+	m := NewModel(testSessions(), Options{})
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.Canceled() {
+		t.Fatal("Esc quit instead of clearing the folder scope")
+	}
+	if len(m.sessions) != 2 {
+		t.Errorf("Esc did not widen scope: %d sessions", len(m.sessions))
+	}
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if !m.Canceled() {
+		t.Error("second Esc did not quit")
+	}
+}
+
+func TestFolderSearchPromptFiltersSessions(t *testing.T) {
+	m := NewModel(testSessions(), Options{})
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlF})
+	if !m.prompting {
+		t.Fatal("Ctrl+F did not open the folder prompt")
+	}
+	if view := m.View(); !strings.Contains(view, "folder:") {
+		t.Errorf("footer missing folder prompt:\n%s", view)
+	}
+
+	m = sendRunes(t, m, "beta")
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.prompting {
+		t.Error("prompt still active after Enter")
+	}
+	if len(m.sessions) != 1 || m.sessions[0].ID != "ses_beta" {
+		t.Fatalf("folder search sessions = %+v, want only ses_beta", m.sessions)
+	}
+	if view := m.View(); !strings.Contains(view, `folder ~ "beta"`) {
+		t.Errorf("header missing folder query:\n%s", view)
+	}
+}
+
+func TestFolderSearchPromptEscapeCancels(t *testing.T) {
+	m := NewModel(testSessions(), Options{})
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlF})
+	m = sendRunes(t, m, "beta")
+	m = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.Canceled() {
+		t.Fatal("Esc in the prompt canceled the picker")
+	}
+	if m.prompting {
+		t.Error("prompt still active after Esc")
+	}
+	if len(m.sessions) != 2 {
+		t.Errorf("canceled prompt changed scope: %d sessions", len(m.sessions))
+	}
+}
+
+func TestCLIScopeLabelIsShown(t *testing.T) {
+	m := NewModel(testSessions(), Options{ScopeLabel: "~/git/project"})
+	m = updateModel(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	if view := m.View(); !strings.Contains(view, "in ~/git/project") {
+		t.Errorf("header missing CLI scope label:\n%s", view)
+	}
+}
+
 func TestEmptySessionList(t *testing.T) {
 	m := NewModel(nil, Options{})
 	m = updateModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})

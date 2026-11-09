@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/jkuhn12/agent-session-manager/internal/merge"
 	"github.com/jkuhn12/agent-session-manager/internal/provider"
+	"github.com/jkuhn12/agent-session-manager/internal/scope"
 	"github.com/jkuhn12/agent-session-manager/internal/tui"
 )
 
@@ -26,11 +28,17 @@ const (
 	usageText = `asm — pick and resume opencode / Claude Code sessions
 
 Usage:
-  asm [pick] [flags]      interactive picker (default)
-  asm list [--json]       print sessions, newest first
-  asm doctor              show where sessions are read from
-  asm init                print the zsh wrapper function
-  asm version             print the version
+  asm [pick] [path...] [flags]   interactive picker (default)
+  asm list [path...] [--json]    print sessions, newest first
+  asm doctor                     show where sessions are read from
+  asm init                       print the zsh wrapper function
+  asm version                    print the version
+
+Scope flags (pick and list):
+  --here, --repo          only sessions in the current git repository
+                          (falls back to the current directory outside git)
+  -d, --dir PATH          only sessions under PATH (repeatable, ~ and globs ok)
+  path...                 positional paths are treated as --dir values
 
 Picker flags:
   --no-preview            disable the detail preview pane
@@ -41,7 +49,7 @@ the zsh wrapper from "asm init" so the shell can cd and launch the agent.`
 
 	zshSnippet = `# Add this to ~/.zshrc, then run: exec zsh
 asm() {
-  # Subcommands pass through. Bare asm and picker flags run the picker.
+  # Subcommands pass through. Bare asm, picker flags and paths run the picker.
   case "${1:-pick}" in
     pick) ;;
     -h|--help|-v|--version|help|version|list|ls|doctor|init)
@@ -49,7 +57,14 @@ asm() {
       return
       ;;
     -*) set -- pick "$@" ;;
-    *) command asm "$@"; return ;;
+    *)
+      case "$1" in
+        ~*|/*|.*|*/*) set -- pick "$@" ;;
+        *)
+          if [[ -d "$1" ]]; then set -- pick "$@"; else command asm "$@"; return; fi
+          ;;
+      esac
+      ;;
   esac
 
   local sel dir agent sid
@@ -95,13 +110,119 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, usageText)
 		return 0
 	default:
-		if strings.HasPrefix(args[0], "-") {
-			// Allow `asm --no-preview` as shorthand for the default command.
+		if strings.HasPrefix(args[0], "-") || looksLikeScopeArg(args[0]) {
+			// Allow `asm --no-preview` and `asm ~/git/project` as shorthand for
+			// the default command.
 			return runPick(args, stdout, stderr)
 		}
 		fmt.Fprintf(stderr, "asm: unknown command %q\n\n%s\n", args[0], usageText)
 		return 2
 	}
+}
+
+// looksLikeScopeArg reports whether an argument is meant to be a folder scope
+// rather than a subcommand name.
+func looksLikeScopeArg(arg string) bool {
+	switch {
+	case arg == "", arg == ".", arg == "..":
+		return arg != ""
+	case strings.HasPrefix(arg, "~"), strings.HasPrefix(arg, "/"):
+		return true
+	case strings.HasPrefix(arg, "."), strings.ContainsRune(arg, filepath.Separator):
+		return true
+	}
+	info, err := os.Stat(arg)
+	return err == nil && info.IsDir()
+}
+
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+
+func (s *stringList) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+// scopeFlags holds the shared pick/list folder filters.
+type scopeFlags struct {
+	here bool
+	dirs stringList
+}
+
+func addScopeFlags(fs *flag.FlagSet) *scopeFlags {
+	sf := &scopeFlags{}
+	fs.BoolVar(&sf.here, "here", false, "only sessions in the current git repository (or current directory)")
+	fs.BoolVar(&sf.here, "repo", false, "alias for --here")
+	fs.Var(&sf.dirs, "dir", "only sessions under PATH (repeatable)")
+	fs.Var(&sf.dirs, "d", "alias for --dir")
+	return sf
+}
+
+// matcher builds a scope matcher from the flags and positional paths.
+func (sf *scopeFlags) matcher(positional []string) scope.Matcher {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	dirs := make([]string, 0, len(sf.dirs)+len(positional))
+	dirs = append(dirs, sf.dirs...)
+	dirs = append(dirs, positional...)
+	return scope.New(cwd, dirs, sf.here)
+}
+
+var (
+	pickFlagArity = map[string]bool{
+		"--no-preview": false,
+		"--here":       false,
+		"--repo":       false,
+		"--title":      true,
+		"-d":           true,
+		"--dir":        true,
+	}
+	listFlagArity = map[string]bool{
+		"--json": false,
+		"--here": false,
+		"--repo": false,
+		"-d":     true,
+		"--dir":  true,
+	}
+)
+
+// reorderFlags moves recognized flags ahead of positional paths so callers can
+// write `asm pick ~/git/work --no-preview` as naturally as `asm pick
+// --no-preview ~/git/work`. The standard flag package stops parsing at the
+// first positional argument.
+func reorderFlags(args []string, arity map[string]bool) []string {
+	flags := make([]string, 0, len(args))
+	positional := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			flags = append(flags, arg)
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+
+		name := arg
+		hasInlineValue := false
+		if index := strings.IndexByte(arg, '='); index >= 0 {
+			name = arg[:index]
+			hasInlineValue = true
+		}
+		flags = append(flags, arg)
+		if takesValue, known := arity[name]; known && takesValue && !hasInlineValue && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return append(flags, positional...)
 }
 
 func newProviders() []provider.Provider {
@@ -131,25 +252,27 @@ func runPick(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	noPreview := fs.Bool("no-preview", false, "disable the detail preview pane")
 	title := fs.String("title", "", "override the picker header")
-	if err := fs.Parse(args); err != nil {
+	scopeFlags := addScopeFlags(fs)
+	if err := fs.Parse(reorderFlags(args, pickFlagArity)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(stdout, usageText)
 			return 0
 		}
 		return 2
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "asm pick: unexpected argument %q\n", fs.Arg(0))
-		return 2
-	}
 
-	sessions := collectSessions(stderr)
+	matcher := scopeFlags.matcher(fs.Args())
+	sessions := matcher.Filter(collectSessions(stderr))
 	if len(sessions) == 0 {
-		fmt.Fprintln(stderr, "asm: no sessions found (is opencode or Claude Code installed?)")
+		if scope := matcher.Label(); scope != "" {
+			fmt.Fprintf(stderr, "asm: no sessions found in %s\n", scope)
+		} else {
+			fmt.Fprintln(stderr, "asm: no sessions found (is opencode or Claude Code installed?)")
+		}
 		return 1
 	}
 
-	options := tui.Options{Title: *title}
+	options := tui.Options{Title: *title, ScopeLabel: matcher.Label()}
 	if !*noPreview {
 		lookup := previewers()
 		options.Preview = func(session provider.Session) provider.Preview {
@@ -182,19 +305,16 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "print JSON instead of a table")
-	if err := fs.Parse(args); err != nil {
+	scopeFlags := addScopeFlags(fs)
+	if err := fs.Parse(reorderFlags(args, listFlagArity)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(stdout, usageText)
 			return 0
 		}
 		return 2
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "asm list: unexpected argument %q\n", fs.Arg(0))
-		return 2
-	}
 
-	sessions := collectSessions(stderr)
+	sessions := scopeFlags.matcher(fs.Args()).Filter(collectSessions(stderr))
 
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)

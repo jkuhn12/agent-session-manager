@@ -104,6 +104,24 @@ func ExpandHome(path string) string {
 	}
 }
 
+// CompactHome replaces the user's home prefix with "~" so paths stay short.
+func CompactHome(path string) string {
+	if path == "" {
+		return ""
+	}
+	home := HomeDir()
+	if home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(filepath.Separator)) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
 // DataHome returns $XDG_DATA_HOME or ~/.local/share.
 func DataHome() string {
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {

@@ -203,20 +203,7 @@ func (d itemDelegate) buildRow(s provider.Session, width int) (plain, styled str
 
 // compactHomePath replaces the user's home prefix with "~" so rows stay short.
 func compactHomePath(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	home := provider.HomeDir()
-	if home == "" {
-		return dir
-	}
-	if dir == home {
-		return "~"
-	}
-	if strings.HasPrefix(dir, home+"/") {
-		return "~" + dir[len(home):]
-	}
-	return dir
+	return provider.CompactHome(dir)
 }
 
 // splitDirDisplay splits a compact directory at the last slash so the parent

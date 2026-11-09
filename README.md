@@ -40,6 +40,9 @@ state they were in" problem.
   including `~`, `~/git` itself, and projects that no longer exist.
 - **Flat, newest-first list** with fuzzy filtering across folder, title, full
   path and agent.
+- **Folder scoping**: start in the current git repo (`--here`), pass one or
+  more folders (`--dir`, positional paths, `~`, globs), or narrow interactively
+  with Tab and a Ctrl+F folder search.
 - **One row per session**: `[oc]`/`[cc]` agent badge, compact `~/…` directory
   (parent dimmed, project folder bold), title, relative age, and a `gone` badge
   when the project folder vanished.
@@ -115,21 +118,57 @@ If the wrapped `asm` is not found, make sure `$(go env GOPATH)/bin` is on
 ## CLI reference
 
 ```
-asm [pick] [flags]      interactive picker (default)
-asm list [--json]       print sessions, newest first
-asm doctor              show where sessions are read from
-asm init                print the zsh wrapper function
-asm version             print the version
-asm help                print usage
+asm [pick] [path...] [flags]   interactive picker (default)
+asm list [path...] [--json]    print sessions, newest first
+asm doctor                     show where sessions are read from
+asm init                       print the zsh wrapper function
+asm version                    print the version
+asm help                       print usage
 ```
 
 `asm ls` is an alias for `asm list`. `asm --no-preview` is shorthand for
-`asm pick --no-preview`.
+`asm pick --no-preview`. A positional path (`.`, `..`, `~/git/work`,
+`./project`, or a folder that exists) is shorthand for a scoped picker:
+`asm ~/git/work` behaves like `asm pick --dir ~/git/work`.
+
+### Folder scoping
+
+Both `asm pick` and `asm list` accept the same scope filters:
+
+| Flag / argument | Meaning |
+| --- | --- |
+| `--here`, `--repo` | Only sessions in the git repository containing the current directory. Includes subfolders and linked worktrees. Falls back to the current directory when it is not inside git. |
+| `-d PATH`, `--dir PATH` | Only sessions in `PATH` or below it. Repeatable. Supports `~` and shell-style globs that match existing folders. |
+| `path...` | Positional paths are treated as additional `--dir` values. |
+
+Multiple scopes combine as a union: a session is shown when it matches **any**
+provided folder or the current repo. Scoping is applied before the picker
+opens, so the header count already reflects it.
+
+```sh
+# Sessions in the repo you are currently standing in
+asm --here
+
+# Everything under two workspace roots
+asm --dir ~/git/work --dir ~/git/side
+
+# Globs work too
+asm list --dir '~/git/client-*'
+
+# Positional path, no subcommand needed
+asm ~/git/agent-session-manager
+```
+
+When `--here` is used outside a git repository, the current directory and its
+descendants are used. A scoped run that finds no sessions exits `1` for the
+picker and prints an empty result for `asm list`.
 
 ### `asm` / `asm pick`
 
 | Flag | Meaning |
 | --- | --- |
+| `--here`, `--repo` | Scope to the current git repository (or directory). |
+| `-d PATH`, `--dir PATH` | Scope to a folder, repeatable; `~` and globs supported. |
 | `--no-preview` | Disable the detail preview pane. |
 | `--title string` | Override the picker header (default: `Agent Sessions`). |
 
@@ -158,6 +197,8 @@ go to stderr, so stdout stays pipeable.
 ```sh
 asm list
 asm list --json
+asm list --here
+asm list --dir ~/git/work
 ```
 
 `--json` emits an indented array of session objects:
@@ -207,13 +248,19 @@ it yourself or copy it into a managed dotfiles file.
 | --- | --- |
 | type | fuzzy filter across folder, title, full path and agent |
 | ↑ / ↓ | move (list defaults also accept `j`/`k` while not filtering) |
+| Tab | scope to the highlighted session's folder; press again to widen back |
+| Ctrl-F | open a folder search line (substring or glob) and Enter to apply |
 | Enter | select the highlighted session (works mid-filter too) |
-| Esc | clear an active filter; when unfiltered, quit with exit `130` |
+| Esc | clear an active filter, then an interactive folder scope, then quit with exit `130` |
 | Ctrl-C | quit immediately with exit `130` |
 
-The header shows `N/M filtered · query` while filtering. The footer shows the
-keys relevant to the current mode. The preview pane appears when the terminal is
-tall enough and hidden with `--no-preview`.
+The header shows `N/M filtered · in <scope>` while filtering or scoped. The
+footer shows the keys relevant to the current mode. The preview pane appears
+when the terminal is tall enough and hidden with `--no-preview`.
+
+Tab and Ctrl-F narrow the sessions the picker was opened with; they do not
+discard the CLI scope. For example, `asm --here` still keeps every interactive
+scope inside the current repository.
 
 ## zsh wrapper
 
@@ -226,7 +273,7 @@ the picker prints the selection on stdout and a shell function performs the
 ```zsh
 # Add this to ~/.zshrc, then run: exec zsh
 asm() {
-  # Subcommands pass through. Bare asm and picker flags run the picker.
+  # Subcommands pass through. Bare asm, picker flags and paths run the picker.
   case "${1:-pick}" in
     pick) ;;
     -h|--help|-v|--version|help|version|list|ls|doctor|init)
@@ -234,7 +281,14 @@ asm() {
       return
       ;;
     -*) set -- pick "$@" ;;
-    *) command asm "$@"; return ;;
+    *)
+      case "$1" in
+        ~*|/*|.*|*/*) set -- pick "$@" ;;
+        *)
+          if [[ -d "$1" ]]; then set -- pick "$@"; else command asm "$@"; return; fi
+          ;;
+      esac
+      ;;
   esac
 
   local sel dir agent sid
@@ -258,8 +312,8 @@ Notes:
 
 - The function is named `asm` and calls `command asm "$@"` to reach the binary,
   avoiding recursion. Subcommands (`list`, `doctor`, `init`, `version`, `help`)
-  pass straight through; bare `asm` and picker flags (`--no-preview`,
-  `--title`) run the picker.
+  pass straight through; bare `asm`, picker flags (`--no-preview`, `--title`,
+  `--here`, `--dir`) and path arguments (`asm ~/git/project`) run the picker.
 - The agent runs as a **child process**, not `exec`; quitting it drops you back
   into a shell already in the project directory.
 - Ghostty needs no special configuration beyond running the picker in whatever
@@ -376,6 +430,7 @@ internal/provider/
   opencode.go            read-only SQLite reader (session_v2 + legacy)
   claude.go              tolerant JSONL scanner
 internal/merge/          concurrent query, dedupe, sort, gone flags
+internal/scope/          current-repo and folder scope matching, glob expansion
 internal/tui/            Bubble Tea list, one-line delegate, preview pane
 testdata/claude/         synthetic Claude transcripts used by tests
 ```
@@ -414,6 +469,7 @@ agent-session-manager/
 ├── internal/
 │   ├── provider/            # shared model, opencode + Claude providers, tests
 │   ├── merge/               # merge/dedupe/sort, tests
+│   ├── scope/               # current-repo/folder scope matching, tests
 │   └── tui/                 # Bubble Tea picker/delegate/preview, tests
 ├── testdata/claude/         # fixture transcripts (subagents included)
 ├── .github/workflows/ci.yml # gofmt, vet, race tests, build

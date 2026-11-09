@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jkuhn12/agent-session-manager/internal/provider"
+	"github.com/jkuhn12/agent-session-manager/internal/scope"
 )
 
 // ErrCanceled is returned by Run when the user dismisses the picker.
@@ -26,6 +28,10 @@ type Options struct {
 	// Preview loads detail for the highlighted session. When nil the preview
 	// pane is disabled.
 	Preview func(provider.Session) provider.Preview
+
+	// ScopeLabel describes a folder scope applied before the picker opened.
+	// It is informational; filtering already happened in the caller.
+	ScopeLabel string
 }
 
 // Selection is the session chosen by the user.
@@ -57,9 +63,21 @@ var (
 
 // Model is the outer Bubble Tea model. It owns the list and the final result.
 type Model struct {
-	sessions []provider.Session
-	options  Options
-	list     list.Model
+	// baseSessions is the full set the picker was opened with; sessions is
+	// the currently visible subset after any interactive folder scope.
+	baseSessions []provider.Session
+	sessions     []provider.Session
+	options      Options
+	list         list.Model
+
+	// scopeDir narrows to a folder subtree (Tab). scopeQuery narrows by a
+	// folder substring or glob typed at the Ctrl+F prompt.
+	scopeDir   string
+	scopeQuery string
+
+	// prompting is true while the Ctrl+F folder search line is active.
+	prompting bool
+	prompt    string
 
 	width         int
 	height        int
@@ -96,6 +114,7 @@ func NewModel(sessions []provider.Session, options Options) Model {
 	l.DisableQuitKeybindings()
 
 	m := Model{
+		baseSessions: sessions,
 		sessions:     sessions,
 		options:      options,
 		list:         l,
@@ -122,10 +141,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Ctrl-C always cancels, even mid-filter.
+		// Ctrl-C always cancels, even mid-filter or mid-prompt.
 		if msg.String() == "ctrl+c" {
 			m.canceled = true
 			return m, tea.Quit
+		}
+
+		if m.prompting {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.prompting = false
+				m.prompt = ""
+				return m, nil
+			case tea.KeyEnter:
+				m.scopeQuery = strings.TrimSpace(m.prompt)
+				m.prompting = false
+				m.prompt = ""
+				m.applyScope()
+				return m, nil
+			case tea.KeyBackspace:
+				m.prompt = trimLastRune(m.prompt)
+				return m, nil
+			case tea.KeySpace:
+				m.prompt += " "
+				return m, nil
+			case tea.KeyRunes:
+				m.prompt += string(msg.Runes)
+				return m, nil
+			}
+			return m, nil
 		}
 
 		if m.list.FilterState() == list.Filtering {
@@ -146,18 +190,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		} else {
-			switch msg.String() {
-			case "esc":
-				if m.list.FilterState() == list.FilterApplied {
-					// Esc first clears an accepted filter.
+			switch {
+			case msg.String() == "esc":
+				switch {
+				case m.list.FilterState() == list.FilterApplied:
+					// Esc clears an accepted filter first.
 					m.list.ResetFilter()
 					m.refreshPreview()
-					return m, nil
+				case m.hasInteractiveScope():
+					// Then it widens an interactive folder scope.
+					m.clearScope()
+				default:
+					m.canceled = true
+					return m, tea.Quit
 				}
-				m.canceled = true
-				return m, tea.Quit
-			case "enter":
+				return m, nil
+			case msg.String() == "enter":
 				return m.selectCurrent()
+			case msg.Type == tea.KeyTab:
+				m.toggleScope()
+				return m, nil
+			case msg.String() == "ctrl+f":
+				m.prompting = true
+				m.prompt = ""
+				return m, nil
 			}
 
 			// Typing starts (or extends) a filter, fzf style, instead of
@@ -293,6 +349,97 @@ func (m Model) selectCurrent() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
+// toggleScope narrows the list to the highlighted session's folder, or widens
+// it back when an interactive scope is already active.
+func (m *Model) toggleScope() {
+	if m.hasInteractiveScope() {
+		m.clearScope()
+		return
+	}
+	session, ok := m.currentSession()
+	if !ok {
+		return
+	}
+	m.scopeDir = session.Directory
+	m.scopeQuery = ""
+	m.applyScope()
+}
+
+func (m *Model) clearScope() {
+	m.scopeDir = ""
+	m.scopeQuery = ""
+	m.applyScope()
+}
+
+func (m Model) hasInteractiveScope() bool {
+	return m.scopeDir != "" || m.scopeQuery != ""
+}
+
+// scopedSessions applies the interactive folder filters to the full session
+// set passed to NewModel.
+func (m Model) scopedSessions() []provider.Session {
+	if !m.hasInteractiveScope() {
+		return m.baseSessions
+	}
+	filtered := make([]provider.Session, 0, len(m.baseSessions))
+	for _, session := range m.baseSessions {
+		if m.scopeDir != "" && !scope.MatchDir(m.scopeDir, session.Directory) {
+			continue
+		}
+		if m.scopeQuery != "" && !scope.MatchQuery(session.Directory, m.scopeQuery) {
+			continue
+		}
+		filtered = append(filtered, session)
+	}
+	return filtered
+}
+
+// applyScope rebuilds the list after the interactive scope changes, keeping
+// the highlighted session selected when it is still visible.
+func (m *Model) applyScope() {
+	previous, hadPrevious := m.currentSession()
+
+	sessions := m.scopedSessions()
+	m.sessions = sessions
+	items := make([]list.Item, len(sessions))
+	for i, session := range sessions {
+		items[i] = SessionItem{Session: session}
+	}
+
+	m.list.ResetFilter()
+	m.list.SetItems(items)
+	m.list.Select(0)
+	if hadPrevious {
+		for i, session := range sessions {
+			if session.Agent == previous.Agent && session.ID == previous.ID {
+				m.list.Select(i)
+				break
+			}
+		}
+	}
+	m.refreshPreview()
+}
+
+// scopeLabel describes the active folder scope for the header.
+func (m Model) scopeLabel() string {
+	switch {
+	case m.scopeQuery != "":
+		return "folder ~ " + strconv.Quote(m.scopeQuery)
+	case m.scopeDir != "":
+		return provider.CompactHome(m.scopeDir)
+	default:
+		return m.options.ScopeLabel
+	}
+}
+
+func trimLastRune(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes[:len(runes)-1])
+}
+
 func (m Model) renderHeader(width int) string {
 	title := truncatePlain(m.options.Title, width)
 	titleWidth := lipgloss.Width(title)
@@ -310,6 +457,9 @@ func (m Model) renderHeader(width int) string {
 	} else {
 		meta = fmt.Sprintf("%d sessions", total)
 	}
+	if label := m.scopeLabel(); label != "" {
+		meta += " · in " + label
+	}
 	meta = truncatePlain(meta, max(0, width-titleWidth-2))
 
 	if meta == "" {
@@ -319,16 +469,27 @@ func (m Model) renderHeader(width int) string {
 }
 
 func (m Model) renderFooter(width int) string {
+	if m.prompting {
+		text := "folder: " + m.prompt + "▏ · enter apply · esc cancel · ctrl+c quit"
+		return footerStyle.Render(truncatePlain(text, width))
+	}
+
 	var text string
 	switch {
 	case len(m.sessions) == 0:
-		text = "enter/esc quit · ctrl+c quit"
+		if m.hasInteractiveScope() {
+			text = "no sessions in scope · esc clear scope · ctrl+c quit"
+		} else {
+			text = "enter/esc quit · ctrl+c quit"
+		}
 	case m.list.FilterState() == list.Filtering:
 		text = "↑/↓ move · enter select · esc clear filter · ctrl+c quit"
 	case m.list.FilterState() == list.FilterApplied:
 		text = "type to refine · enter select · esc clear filter · ctrl+c quit"
+	case m.hasInteractiveScope():
+		text = "type filter · tab clear scope · ctrl+f folder · enter select · esc clear scope"
 	default:
-		text = "type to filter · ↑/↓ move · enter select · esc quit · ctrl+c quit"
+		text = "type filter · tab scope folder · ctrl+f folder search · enter select · esc quit"
 	}
 	return footerStyle.Render(truncatePlain(text, width))
 }

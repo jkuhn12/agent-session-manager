@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +30,7 @@ func TestRunVersionAndInit(t *testing.T) {
 	if code := run([]string{"init"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("init exit = %d, stderr = %s", code, stderr.String())
 	}
-	for _, want := range []string{"asm()", "opencode -s", "claude --resume", "IFS=$'\\t'", `command asm "$@"`, "list|ls|doctor|init"} {
+	for _, want := range []string{"asm()", "opencode -s", "claude --resume", "IFS=$'\\t'", `command asm "$@"`, "list|ls|doctor|init", "~*|/*|.*|*/*", `[[ -d "$1" ]]`} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("init output missing %q:\n%s", want, stdout.String())
 		}
@@ -94,6 +96,107 @@ func TestRunListTable(t *testing.T) {
 	}
 	if strings.Contains(output, "subagent") {
 		t.Errorf("subagent session leaked into table:\n%s", output)
+	}
+}
+
+func TestRunListScopeByDirAndPositionalPath(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	createLegacyDB(t, dbPath)
+	t.Setenv("ASM_OPENCODE_DB", dbPath)
+	t.Setenv("ASM_CLAUDE_PROJECTS", filepath.Join(dir, "no-claude"))
+
+	all := listJSON(t)
+	if len(all) != 2 {
+		t.Fatalf("unscoped sessions = %d, want 2", len(all))
+	}
+	existing := all[0].Directory
+
+	scoped := listJSON(t, "--dir", filepath.Join(existing, "gone"))
+	if len(scoped) != 1 || scoped[0].Title != "Old work" {
+		t.Errorf("--dir gone sessions = %+v, want only Old work", scoped)
+	}
+
+	positional := listJSON(t, existing)
+	if len(positional) != 2 {
+		t.Errorf("positional path sessions = %d, want 2", len(positional))
+	}
+
+	empty := listJSON(t, filepath.Join(dir, "does-not-exist"))
+	if len(empty) != 0 {
+		t.Errorf("unmatched scope sessions = %+v, want none", empty)
+	}
+}
+
+func TestRunListHereScopesToCurrentRepository(t *testing.T) {
+	requireGitBinary(t)
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	createLegacyDB(t, dbPath)
+	t.Setenv("ASM_OPENCODE_DB", dbPath)
+	t.Setenv("ASM_CLAUDE_PROJECTS", filepath.Join(dir, "no-claude"))
+
+	existing := listJSON(t)[0].Directory
+	runGit(t, existing, "init", "-q")
+	sub := filepath.Join(existing, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(sub)
+	if got := listJSON(t, "--here"); len(got) != 2 {
+		t.Errorf("--here from repo subdirectory sessions = %d, want 2", len(got))
+	}
+
+	t.Chdir(t.TempDir())
+	if got := listJSON(t, "--here"); len(got) != 0 {
+		t.Errorf("--here outside the repo sessions = %d, want 0", len(got))
+	}
+}
+
+func TestReorderFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"flags first", []string{"--dir", "y", "x"}, []string{"--dir", "y", "x"}},
+		{"flag after path", []string{"x", "--dir", "y", "z"}, []string{"--dir", "y", "x", "z"}},
+		{"inline value", []string{"x", "--dir=y"}, []string{"--dir=y", "x"}},
+		{"bool flag after path", []string{"x", "--no-preview"}, []string{"--no-preview", "x"}},
+		{"terminator", []string{"x", "--", "--dir"}, []string{"--", "x", "--dir"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := reorderFlags(test.args, pickFlagArity)
+			if strings.Join(got, "\x00") != strings.Join(test.want, "\x00") {
+				t.Errorf("reorderFlags(%v) = %v, want %v", test.args, got, test.want)
+			}
+		})
+	}
+}
+
+func TestLooksLikeScopeArg(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		arg  string
+		want bool
+	}{
+		{".", true},
+		{"..", true},
+		{"~/git", true},
+		{"/tmp", true},
+		{"./project", true},
+		{"parent/child", true},
+		{dir, true},
+		{"list", false},
+		{"wat", false},
+	}
+	for _, test := range tests {
+		if got := looksLikeScopeArg(test.arg); got != test.want {
+			t.Errorf("looksLikeScopeArg(%q) = %v, want %v", test.arg, got, test.want)
+		}
 	}
 }
 
@@ -219,4 +322,37 @@ func nullable(value string) any {
 		return nil
 	}
 	return value
+}
+
+// listJSON runs `asm list --json` with extra arguments and decodes the result.
+func listJSON(t *testing.T, args ...string) []provider.Session {
+	t.Helper()
+	full := append([]string{"list", "--json"}, args...)
+	var stdout, stderr bytes.Buffer
+	if code := run(full, &stdout, &stderr); code != 0 {
+		t.Fatalf("asm %v exit = %d, stderr = %s", full, code, stderr.String())
+	}
+	var sessions []provider.Session
+	if err := json.Unmarshal(stdout.Bytes(), &sessions); err != nil {
+		t.Fatalf("decode json: %v\noutput: %s", err, stdout.String())
+	}
+	if sessions == nil {
+		t.Fatalf("json output is null, want an empty array: %s", stdout.String())
+	}
+	return sessions
+}
+
+func requireGitBinary(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmdArgs := append([]string{"-C", dir}, args...)
+	if out, err := exec.Command("git", cmdArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }
